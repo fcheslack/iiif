@@ -1,41 +1,22 @@
 package iiif
 
 import (
-	//"errors"
+	"encoding/json"
+	"errors"
 	"github.com/disintegration/imaging"
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
-	"log"
+	//	"log"
 )
 
-/*
-func GetRegion(img image.Image, region Region) (image.Image, error) {
-
-}
-
-func Resize(img image.Image, size Size) (image.Image, error) {
-
-}
-
-func Rotate(img image.Image, r Rotation) (image.Image, error) {
-
-}
-
-func GetQuality(img image.Image, q Quality) (image.Image, error) {
-
-}
-
-func FormatImage(img image.Image, f Format) ([]byte, error) {
-
-}
-*/
-
+//http://iiif.io/api/image/2.0/#image-information sizes (currently unused by this implementation)
 type Dimensions struct {
 	Width  int `json:"width`
 	Height int `json:"height`
 }
 
+//http://iiif.io/api/image/2.0/#image-information profiles subsection
 type Profile struct {
 	Id        string   `json:""`
 	Formats   []string `json:"formats"`
@@ -43,38 +24,76 @@ type Profile struct {
 	Supports  []string `json:"supports"`
 }
 
+func (p Profile) MarshalJSON() ([]byte, error) {
+	if p.Id != "" {
+		return json.Marshal(p.Id)
+	}
+
+	m := make(map[string][]string)
+	m["formats"] = p.Formats
+	m["qualities"] = p.Qualities
+	m["supports"] = p.Supports
+	return json.Marshal(m)
+}
+
+// http://iiif.io/api/image/2.0/#information-request
 type IIIFInfo struct {
-	Context  string `json:"@context"`
-	Id       string `json:"@id"`
-	Protocol string `json:"protocol"`
-	Width    int    `json:"width"`
-	Height   int    `json:"height"`
-	Profile  `json:"profile"`
+	Context  string    `json:"@context"`
+	Id       string    `json:"@id"`
+	Protocol string    `json:"protocol"`
+	Width    int       `json:"width"`
+	Height   int       `json:"height"`
+	Profile  []Profile `json:"profile"`
 	//Sizes    []Dimensions `json:"sizes"`
 	//Tiles
 	//Service
 }
 
-func Info(filename string) map[string]string {
+//Generate a default info struct for this server implementation
+func DefaultInfo() IIIFInfo {
+	profiles := make([]Profile, 2)
+	profiles[0] = Profile{Id: "http://iiif.io/api/image/2/level0.json"}
+	profiles[1] = Profile{
+		Formats: []string{
+			"jpg",
+			"png",
+			"tif",
+			"gif",
+		},
+		Qualities: []string{"default"},
+		Supports:  []string{"cors", "mirroring", "regionByPx", "regionByPct", "rotationBy90s", "sizeAboveFull", "sizeByWhListed", "sizeByH", "sizeByPct", "sizeByW", "sizeByWh"},
+	}
+
+	return IIIFInfo{
+		Context:  "http://iiif.io/api/image/2/context.json",
+		Protocol: "http://iiif.io/api/image",
+		Profile:  profiles,
+	}
+}
+
+//Get a IIIFInfo struct about the file passed in
+func Info(filename string) (IIIFInfo, error) {
 	im, err := imaging.Open(filename)
 	if err != nil {
-		log.Fatal(err)
+		return IIIFInfo{}, err
 	}
 
 	sourceBounds := im.Bounds()
 	sourceWidth := sourceBounds.Dx()
 	sourceHeight := sourceBounds.Dy()
 
-	info := make(map[string]string)
-	info["width"] = string(sourceWidth)
-	info["height"] = string(sourceHeight)
-	return info
+	iinfo := DefaultInfo()
+	iinfo.Width = sourceWidth
+	iinfo.Height = sourceHeight
+
+	return iinfo, nil
 }
 
+//perform the specified transformations from a IIIF URI on an image
 func Process(filename string, params URI) (image.Image, error) {
 	im, err := imaging.Open(filename)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	sourceBounds := im.Bounds()
@@ -88,7 +107,7 @@ func Process(filename string, params URI) (image.Image, error) {
 	case params.Region.Percent:
 		x, y, w, h, err := params.Region.ParseFloats()
 		if err != nil {
-			log.Fatal(err)
+			return nil, err
 		}
 		x0 := int(x * float64(sourceWidth))
 		y0 := int(y * float64(sourceHeight))
@@ -100,7 +119,7 @@ func Process(filename string, params URI) (image.Image, error) {
 		//x,y,w,h format
 		x, y, w, h, err := params.Region.ParseInts()
 		if err != nil {
-			log.Fatal(err)
+			return nil, err
 		}
 		im = imaging.Crop(im, image.Rect(int(x), int(y), int(x+w), int(y+h)))
 		break
@@ -128,7 +147,7 @@ func Process(filename string, params URI) (image.Image, error) {
 		im = imaging.Fit(im, int(params.Size.W), int(params.Size.H), imaging.Hamming)
 		break
 	default:
-		log.Fatal("unknown Size form")
+		return nil, errors.New("Unknown Size form")
 	}
 
 	//rotate image by 90 degree increments
@@ -149,7 +168,7 @@ func Process(filename string, params URI) (image.Image, error) {
 		im = imaging.Rotate90(im)
 		break
 	default:
-		log.Fatal("unsupported rotation degrees")
+		return nil, errors.New("unsupported rotation degrees")
 	}
 
 	switch params.Quality {
@@ -158,13 +177,13 @@ func Process(filename string, params URI) (image.Image, error) {
 	case "color":
 		break
 	case "gray":
-		log.Fatal("unimplemented")
+		return nil, errors.New("unimplemented")
 		break
 	case "bitonal":
-		log.Fatal("unimplemented")
+		return nil, errors.New("unimplemented")
 		break
 	default:
-		log.Fatal("unknown Quality argument")
+		return nil, errors.New("unknown Quality argument")
 	}
 
 	return im, nil

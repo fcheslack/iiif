@@ -2,8 +2,9 @@ package iiif
 
 import (
 	"errors"
+	"fmt"
 	"github.com/disintegration/imaging"
-	//"log"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -11,7 +12,10 @@ import (
 
 //{scheme}://{server}{/prefix}/{identifier}/{region}/{size}/{rotation}/{quality}.{format}
 
+//{scheme}://{server}{/prefix}/{identifier}/info.json
+
 type URI struct {
+	Info       bool
 	Scheme     string
 	Server     string
 	Prefix     string
@@ -21,6 +25,40 @@ type URI struct {
 	Rotation   Rotation
 	Quality    Quality
 	Format     Format
+}
+
+// build the image ID indicated by the URI
+// http://iiif.io/api/image/2.0/#information-request for @id
+func (params URI) ImageID() string {
+	return fmt.Sprintf("%s://%s%s/%s", params.Scheme, params.Server, params.Prefix, params.Identifier)
+}
+
+// true if the URI indicates all defaults such that the source image should be passed straight through
+// without modifications
+func (params URI) Unmodified() bool {
+	if !params.Region.Full {
+		return false
+	}
+
+	if !params.Size.Full {
+		return false
+	}
+
+	if params.Rotation.Mirror || (params.Rotation.N != 0.0) {
+		return false
+	}
+
+	if string(params.Quality) != "default" {
+		return false
+	}
+
+	//match the format to the filename extension
+	ext := strings.TrimPrefix(filepath.Ext(params.Identifier), ".")
+	if string(params.Format) != ext {
+		return false
+	}
+
+	return true
 }
 
 type Region struct {
@@ -216,20 +254,45 @@ func ParseRotation(r string) (Rotation, error) {
 	return rotation, nil
 }
 
+/*
+func ParseURIStart(s string, prefix string) {
+	startRE := regexp.MustCompile(`([^:]+):\/\/([^/]+)/`)
+	matches := startRE.FindStringSubmatch(s, -1)
+	if len(matches) < 3 {
+		return URI{}, errors.New("Not enough parameters in URI")
+		u.Info = true
+		u.Identifier = matches[0][1]
+		return u, nil
+	}
+}
+*/
+
 //parse the non-server section of an IIIF URI (specifying the image ID and parameters)
 func ParseURI(s string) (URI, error) {
+	u := URI{}
+
+	//check first for the simpler info.json request
+	//(identifier)(region)(size)(rotation)(quality)(format)
+	//{scheme}://{server}{/prefix}/{identifier}/info.json
+	infoRE := regexp.MustCompile(`/([^/]+)/info\.json$`)
+	matches := infoRE.FindAllStringSubmatch(s, -1)
+	if len(matches) == 1 && len(matches[0]) == 2 {
+		u.Info = true
+		u.Identifier = matches[0][1]
+		return u, nil
+	}
+
 	//capture groups between slashes (and format extension)
 	//(identifier)(region)(size)(rotation)(quality)(format)
 	paramsRE := regexp.MustCompile(`/([^/]+)/([^/]+)/([^/]+)/([^/]+)/([^/]+)\.([^/]+)`)
-	matches := paramsRE.FindAllStringSubmatch(s, -1)
+	matches = paramsRE.FindAllStringSubmatch(s, -1)
 	if len(matches) < 1 || len(matches[0]) < 7 {
 		return URI{}, errors.New("Not enough parameters in URI")
 	}
-	u := URI{
-		Identifier: matches[0][1],
-		Quality:    Quality(matches[0][5]),
-		Format:     Format(matches[0][6]),
-	}
+	u.Info = false
+	u.Identifier = matches[0][1]
+	u.Quality = Quality(matches[0][5])
+	u.Format = Format(matches[0][6])
 
 	region, err := ParseRegion(matches[0][2])
 	if err != nil {

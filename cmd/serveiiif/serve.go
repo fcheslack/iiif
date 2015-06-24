@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"github.com/disintegration/imaging"
 	"github.com/fcheslack/iiif"
@@ -28,8 +29,8 @@ func main() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Got request for %s", r.URL.Path)
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 
-		//scheme := r.URL.Scheme
 		fullPath := r.URL.Path
 		if !strings.HasPrefix(fullPath, *pathPrefix) {
 			http.Error(w, "Request without appropriate path prefix", 404)
@@ -42,10 +43,42 @@ func main() {
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		//fill out params based on predefined or http parsed values
+		scheme := r.URL.Scheme
+		if scheme == "" {
+			scheme = "http"
+		}
+		host := r.Host
+		iiifparams.Scheme = scheme
+		iiifparams.Server = host
+		iiifparams.Prefix = *pathPrefix
 
 		filename, err := url.QueryUnescape(iiifparams.Identifier)
 		if err != nil {
 			http.Error(w, "source image not found", 404)
+			return
+		}
+
+		if iiifparams.Info {
+			info, err := iiif.Info(filename)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			info.Id = iiifparams.ImageID()
+
+			encw := json.NewEncoder(w)
+			err = encw.Encode(info)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+			}
+			return
+		}
+
+		//pass the file straight through if no modifications are needed
+		if iiifparams.Unmodified() {
+			log.Print("unmodified, passing through")
+			http.ServeFile(w, r, filepath.Join(imageDir, filename))
 			return
 		}
 
